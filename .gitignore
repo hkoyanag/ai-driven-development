@@ -1,0 +1,8 @@
+# 機密情報ファイルをGitの管理から除外
+.env
+param.env
+*.env
+
+# Pythonのキャッシュファイルを除外
+__pycache__/
+*.pyc

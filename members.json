@@ -1,0 +1,49 @@
+[
+  {
+    "id": 5,
+    "login": "sato",
+    "name": "佐藤 隆",
+    "role": "インフラ・DB担当",
+    "fixed_holidays": [
+      2
+    ],
+    "specific_holidays": [
+      "2026-07-08"
+    ]
+  },
+  {
+    "id": 6,
+    "login": "suzuki",
+    "name": "鈴木 美咲",
+    "role": "フロントエンド担当",
+    "fixed_holidays": [
+      3
+    ],
+    "specific_holidays": [
+      "2026-07-09"
+    ]
+  },
+  {
+    "id": 7,
+    "login": "takahashi",
+    "name": "高橋 健太",
+    "role": "バックエンド・API担当",
+    "fixed_holidays": [
+      4
+    ],
+    "specific_holidays": [
+      "2026-07-03"
+    ]
+  },
+  {
+    "id": 8,
+    "login": "koyanagi",
+    "name": "小栁 明",
+    "role": "PM・その他緊急担当",
+    "fixed_holidays": [
+      5,
+      6
+    ],
+    "specific_holidays": []
+  }
+]

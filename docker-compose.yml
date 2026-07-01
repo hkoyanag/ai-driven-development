@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: redmine-db
+    restart: always
+    environment:
+      POSTGRES_DB: redmine
+      POSTGRES_USER: redmine
+      POSTGRES_PASSWORD: redmine_password
+    ports:
+      - "5432:5432" # ホスト側のA5:SQL Mk-2から接続するためにポートを開放
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: redmine-mailpit
+    restart: always
+    ports:
+      - "8025:8025" # MailpitのWeb画面確認用 (ブラウザでアクセス)
+      - "1025:1025" # SMTP受付ポート
+
+  redmine:
+    image: redmine:5.1-alpine
+    container_name: redmine-app
+    restart: always
+    depends_on:
+      - db
+      - mailpit
+    ports:
+      - "3000:3000" # RedmineのWeb画面確認用
+    environment:
+      REDMINE_DB_POSTGRES: db
+      REDMINE_DB_DATABASE: redmine
+      REDMINE_DB_USERNAME: redmine
+      REDMINE_DB_PASSWORD: redmine_password
+      # Mailpit連携用（Redmineからの通知メールをすべてキャッチ）
+      REDMINE_SMTP_ADDRESS: mailpit
+      REDMINE_SMTP_PORT: 1025
+      REDMINE_SMTP_AUTHENTICATION: none
+    volumes:
+      - redmine_data:/usr/src/redmine/files
+
+volumes:
+  pg_data:
+  redmine_data:
