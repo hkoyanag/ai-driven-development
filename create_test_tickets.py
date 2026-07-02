@@ -1,6 +1,6 @@
 import os
 import requests
-import json
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # --- 設定情報の外部読み込み ---
@@ -9,60 +9,108 @@ load_dotenv()
 REDMINE_URL = os.getenv("REDMINE_URL", "http://localhost:3000")
 REDMINE_USER = os.getenv("REDMINE_ADMIN_USER", "admin")
 REDMINE_PASSWORD = os.getenv("REDMINE_ADMIN_PASSWORD", "admin")
+PROJECT_ID = "ai-test"
 
-def create_ticket(subject, description):
-    """新規の未割り当てチケット（ステータス: 新規(1)）を作成する"""
-    url = f"{REDMINE_URL}/issues.json"
+AUTH = (REDMINE_USER, REDMINE_PASSWORD)
+
+def delete_all_current_issues():
+    """1. 過去の古いテストチケットを根こそぎ全削除する機能"""
+    print("🧹 過去のテストチケットをクレンジング中...")
+    # 全ステータス(*)のチケットを取得
+    url = f"{REDMINE_URL}/issues.json?project_id={PROJECT_ID}&status_id=*&limit=100"
+    res = requests.get(url, auth=AUTH)
     
-    data = {
-        "issue": {
-            "project_id": "ai-test",     # 対象プロジェクト
-            "tracker_id": 1,             # バグ
-            "status_id": 1,              # 新規
-            "priority_id": 2,            # 通常
-            "subject": subject,
-            "description": description
-        }
-    }
-    
-    headers = {"Content-Type": "application/json"}
-    
-    res = requests.post(
-        url,
-        headers=headers,
-        data=json.dumps(data),
-        auth=(REDMINE_USER, REDMINE_PASSWORD)
-    )
-    
-    if res.status_code == 201:
-        print(f"  ✅ チケット作成成功: 「{subject}」")
+    if res.status_code == 200:
+        issues = res.json().get("issues", [])
+        if not issues:
+            print("✨ 削除対象の古いチケットはありません。クリーンな状態です。")
+            return
+        
+        for issue in issues:
+            issue_id = issue["id"]
+            del_url = f"{REDMINE_URL}/issues/{issue_id}.json"
+            del_res = requests.delete(del_url, auth=AUTH)
+            if del_res.status_code == 200:
+                print(f"  🗑️ チケット #{issue_id} を削除しました。")
+        print("✅ 過去データの全削除が完了しました！")
     else:
-        print(f"  ❌ チケット作成失敗: {res.status_code}")
-        print(f"  エラー詳細: {res.text}")
+        print("⚠️ 過去チケットの取得に失敗しました。プロジェクトが存在するか確認してください。")
 
-def main():
-    print("--- Redmine テストデータ自動投入スクリプト 起動 ---")
+def create_rich_test_tickets():
+    """2. マネジメント向けダッシュボードを彩る、多彩なバリエーションのチケットを自動生成"""
+    print("\n🚀 デモ用のバリエーション豊かなテストデータを投入します...")
     
-    # 投入するテストデータ（3つの異なる専門領域）
+    # 日付の計算（今日、昨日、3日前）
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    three_days_ago_str = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+
+    # デモ用のドラマチックなデータバリエーション定義
     test_tickets = [
+        # --- Aパターン: 本日発生・未割り当て（AI自動仕分けエンジンに今すぐ喰わせるターゲット） ---
         {
-            "subject": "画面のボタンのデザインが崩れている",
-            "description": "お世話になります。Google Chromeでログイン画面を開いた際、ログインボタンの右端が切れて表示されてしまいます。CSSの調整をお願いできますでしょうか。"
+            "subject": "【インフラ】本番ステージング環境のDBの接続が瞬断する",
+            "description": "本日朝から、数回接続エラーを検知しました。解析をお願いします。",
+            "status_id": 1, # 新規
+            "due_date": today_str
         },
         {
-            "subject": "APIのレスポンスが500エラーになる",
-            "description": "スマホアプリからユーザー情報を取得するAPI（/api/v1/users）を呼び出した際、サーバー側で500 Internal Server Errorが発生しています。ログの確認と修正をお願いします。"
+            "subject": "【バックエンド】APIのレスポンスが稀に500エラーになる不具合",
+            "description": "ユーザー情報の更新処理で、500Internal Server Errorが発生しています。",
+            "status_id": 1, # 新規
+            "due_date": None
         },
+        
+        # --- Bパターン: すでに終了しているタスク（「消化率」をきれいに上昇させるための実績データ） ---
         {
-            "subject": "ステージング環境のDBの接続が瞬断する",
-            "description": "本日14時頃より、ステージング環境のアプリケーションからDBへの接続確認の際に、数分おきに接続瞬断エラーが多発しています。コネクションプールの設定等の確認をお願いします。"
+            "subject": "【フロント】画面のボタンのデザインが崩れている箇所の微調整",
+            "description": "昨日の夕方に報告のあったUI崩れを修正してください。",
+            "status_id": 3, # 終了 (Redmineの標準ID:3)
+            "due_date": yesterday_str
+        },
+        
+        # --- Cパターン: 期限超過（上司向けアラート「⚠️要フォロー！」を発動させるための遅延データ） ---
+        {
+            "subject": "【インフラ】ネットワーク疎通テストとセキュリティグループの見直し",
+            "description": "3日前に対応完了予定だったタスクですが、詰まっています。",
+            "status_id": 2, # 進行中
+            "due_date": three_days_ago_str # 3日前（期限切れ！）
         }
     ]
-    
-    for ticket in test_tickets:
-        create_ticket(ticket["subject"], ticket["description"])
-    
-    print("\nすべてのテストデータの投入が完了しました！")
+
+    for item in test_tickets:
+        payload = {
+            "issue": {
+                "project_id": PROJECT_ID,
+                "subject": item["subject"],
+                "description": item["description"],
+                "status_id": item["status_id"]
+            }
+        }
+        
+        # 🌟 期日が設定されている場合は、Redmineの開始日整合性エラーを完全に回避する処理
+        if item["due_date"]:
+            payload["issue"]["due_date"] = item["due_date"]
+            
+            # 期日（YYYY-MM-DD）の1日前を開始日として自動計算してセット
+            due_dt = datetime.strptime(item["due_date"], "%Y-%m-%d")
+            start_dt = due_dt - timedelta(days=1)
+            payload["issue"]["start_date"] = start_dt.strftime("%Y-%m-%d")
+
+        url = f"{REDMINE_URL}/issues.json"
+        res = requests.post(url, auth=AUTH, json=payload)
+        
+        if res.status_code == 201:
+            new_id = res.json()["issue"]["id"]
+            status_name = "新規" if item["status_id"] == 1 else ("進行中" if item["status_id"] == 2 else "終了")
+            print(f"  ➕ チケット作成成功! -> #{new_id} [{status_name}] (期日: {item['due_date'] or '未設定'})")
+        else:
+            print(f"  ❌ 作成失敗: {res.text}")
+
+    print("\n🎉 すべてのテストデータの作成が完了しました！")
 
 if __name__ == "__main__":
-    main()
+    # 1. まず過去分をきれいに消し去る
+    delete_all_current_issues()
+    # 2. 次にバリエーション豊かなデータを流し込む
+    create_rich_test_tickets()
