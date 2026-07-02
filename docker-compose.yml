@@ -43,6 +43,20 @@ services:
     volumes:
       - redmine_data:/usr/src/redmine/files
 
+  # 🌟 【追加】ダッシュボード用の新規コンテナサービス
+  dashboard:
+    build: .
+    container_name: gemini-dashboard
+    restart: always
+    depends_on:
+      - redmine
+    ports:
+      - "8501:8501" # ダッシュボードのWeb画面確認用
+    environment:
+      - REDMINE_URL=http://redmine-app:3000 # 💡Redmineのcontainer_nameに合わせて「redmine-app」を指定
+    volumes:
+      - ./.env:/app/.env # ローカルの.envの変更をリアルタイムにコンテナへ同期
+
 volumes:
   pg_data:
   redmine_data:
