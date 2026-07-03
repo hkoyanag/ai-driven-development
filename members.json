@@ -4,6 +4,9 @@
     "login": "sato",
     "name": "佐藤 隆",
     "role": "インフラ・DB担当",
+    "skills": "Network, DB, Security",
+    "join_date": "2025-04-01",
+    "exit_date": "2026-07-02",
     "fixed_holidays": [
       2
     ],
@@ -16,6 +19,9 @@
     "login": "suzuki",
     "name": "鈴木 美咲",
     "role": "フロントエンド担当",
+    "skills": "React, CSS, HTML5",
+    "join_date": "2025-04-01",
+    "exit_date": "2026-12-30",
     "fixed_holidays": [
       3
     ],
@@ -28,6 +34,9 @@
     "login": "takahashi",
     "name": "高橋 健太",
     "role": "バックエンド・API担当",
+    "skills": "Python, FastAPI, API Design",
+    "join_date": "2025-04-01",
+    "exit_date": "2026-12-30",
     "fixed_holidays": [
       4
     ],
@@ -40,6 +49,9 @@
     "login": "koyanagi",
     "name": "小栁 明",
     "role": "PM・その他緊急担当",
+    "skills": "PM, Management, Emergency",
+    "join_date": "2025-04-01",
+    "exit_date": "2026-12-30",
     "fixed_holidays": [
       5,
       6

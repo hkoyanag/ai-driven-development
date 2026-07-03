@@ -1,193 +1,240 @@
+import streamlit as st
+import pandas as pd
+import json
 import os
 import requests
-import json
-import pandas as pd
-import streamlit as st
+import re
 import plotly.express as px
-from datetime import datetime
 from dotenv import load_dotenv
-from streamlit_autorefresh import st_autorefresh
+from datetime import datetime
 
-# --- 設定情報の外部読み込み ---
 load_dotenv()
+
+st.set_page_config(page_title="AI-Driven Development Dashboard", layout="wide")
 
 REDMINE_URL = os.getenv("REDMINE_URL", "http://localhost:3000")
 REDMINE_USER = os.getenv("REDMINE_ADMIN_USER", "admin")
-REDMINE_PASSWORD = os.getenv("REDMINE_ADMIN_PASSWORD", "admin")
-ENV_STAGE = os.getenv("ENV_STAGE", "Dev")
-AI_EXEC_MODE = os.getenv("AI_EXEC_MODE", "Manual")
+REDMINE_PASSWORD = os.getenv("REDMINE_ADMIN_PASSWORD", "password")
+AUTH = (REDMINE_USER, REDMINE_PASSWORD)
 
-# 10秒ごとに画面を自動で最新情報に更新
-st_autorefresh(interval=10000, limit=100, key="datarefresh")
+WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
 
-# ページの設定
-st.set_page_config(page_title="チーム稼働状況ダッシュボード", layout="wide")
-
-# --- 📁 サイドバーのレイアウト設計 ---
-with st.sidebar:
-    st.header("⚙️ システム運行ステータス")
-    st.markdown(f"**現在の環境**: `{ENV_STAGE}`")
-    
-    if AI_EXEC_MODE == "Auto":
-        interval_sec = os.getenv("AI_CHECK_INTERVAL", "5")
-        st.success("🤖 AI仕分け: 常時自動監視中")
-        st.markdown(f"裏側でAIエンジンが **【 {interval_sec} 秒おき 】** にRedmineを常時巡回監視しています。")
-    else:
-        st.info("⏰ AI仕分け: 定期バッチ運行")
-
-# --- メイン画面のタイトル表示 ---
-stage_badge = f"🛠️ {ENV_STAGE}" if ENV_STAGE in ["Dev", "QA"] else f"🚀 {ENV_STAGE}"
-st.title(f"📊 稼働状況ダッシュボード ({stage_badge})")
-st.markdown("Redmineとリアルタイムに連携し、チームのタスク負荷やプロジェクトの消化状況を可視化します。")
-
-# --- データ取得関数 ---
-def get_redmine_issues():
-    # 15件以上の表示に対応するため、取得件数上限を100に設定
-    url = f"{REDMINE_URL}/issues.json?project_id=ai-test&status_id=*&limit=100"
-    try:
-        res = requests.get(url, auth=(REDMINE_USER, REDMINE_PASSWORD), timeout=5)
-        if res.status_code == 200:
-            return res.json().get("issues", [])
-    except Exception as e:
-        st.error(f"Redmine通信エラー: {e}")
+def load_members():
+    if os.path.exists("members.json"):
+        with open("members.json", "r", encoding="utf-8") as f:
+            return json.load(f)
     return []
 
-def format_iso_to_datetime(iso_str):
-    """ISO 8601形式の文字列 (2026-07-02T15:30:00Z) を YYYY/MM/DD HH:MM:SS に変換する"""
-    if not iso_str:
-        return "未設定"
-    try:
-        # タイムゾーンの'Z'やオフセットを考慮してパース
-        clean_str = iso_str.replace("Z", "")
-        if "." in clean_str:
-            clean_str = clean_str.split(".")[0]
-        dt = datetime.fromisoformat(clean_str)
-        return dt.strftime("%Y/%m/%d %H:%M:%S")
-    except Exception:
-        return iso_str[:19].replace("-", "/").replace("T", " ")
+def save_members(members):
+    with open("members.json", "w", encoding="utf-8") as f:
+        json.dump(members, f, indent=2, ensure_ascii=False)
 
-# --- データ処理と画面描画 ---
-issues = get_redmine_issues()
+def match_member_name(redmine_name, json_members):
+    if not redmine_name:
+        return "未割り当て"
+    norm_redmine = re.sub(r'\s+', '', str(redmine_name))
+    for m in json_members:
+        if re.sub(r'\s+', '', m["name"]) == norm_redmine:
+            return m["name"]
+    return redmine_name
 
-if not issues:
-    st.warning("Redmineからチケットデータを取得できませんでした。")
-else:
-    today_str = datetime.now().strftime("%Y-%m-%d")
+tab1, tab2 = st.tabs(["📊 稼働状況ダッシュボード", "👥 メンバー管理・要員計画"])
 
-    data = []
-    for issue in issues:
-        # 🌟 担当者名の日本表記化 (姓 名) への組み替えロジック
-        assigned_user = issue.get("assigned_to", {})
-        if assigned_user:
-            # APIから取得できる場合は姓と名を個別抽出して結合、なければnameを使用
-            user_id = assigned_user.get("id")
-            # 通常のAPIレスポンスのname属性から英語順をパースして並び替えるセーフティ
-            raw_name = assigned_user.get("name", "未割り当て")
-            if " " in raw_name and raw_name != "未割り当て":
-                # Redmineのデフォルト「名 姓」を「姓 名」にひっくり返すガード
-                parts = raw_name.split(" ")
-                if len(parts) == 2:
-                    # アルファベット表記などの混在も考慮しつつ、今回のテストデータ用に最適化
-                    # 通常、Redmineの表示が「健太 高橋」になっていれば parts[1]=高橋, parts[0]=健太
-                    assigned_to = f"{parts[1]} {parts[0]}"
-                else:
-                    assigned_to = raw_name
-            else:
-                assigned_to = raw_name
-        else:
-            assigned_to = "未割り当て"
+members = load_members()
 
-        due_date = issue.get("due_date", None)
-        if due_date:
-            due_date = due_date.replace("-", "/")
-
-        data.append({
-            "チケットID": issue["id"],
-            "件名": issue["subject"],
-            "ステータス": issue["status"]["name"],
-            "担当者": assigned_to,
-            "作成日": format_iso_to_datetime(issue["created_on"]), # 🌟 日時フォーマット化
-            "更新日": format_iso_to_datetime(issue["updated_on"]), # 🌟 日時フォーマット化
-            "期日": due_date if due_date else "未設定"
-        })
-    df = pd.DataFrame(data)
-
-    # 🌟 左端のナンバリング（Pandasのインデックス）を1から開始にする
-    df.index = df.index + 1
-
-    # --- 各種ビジネス指標の算出ロジック ---
-    total_tickets = len(df)
-    # 本日発生数は日付部分だけでマッチング
-    today_prefix = datetime.now().strftime("%Y/%m/%d")
-    today_created_count = len(df[df["作成日"].str.startswith(today_prefix)])
-    active_tasks_df = df[~df["ステータス"].isin(["終了", "Closed"])]
-    remaining_tasks_count = len(active_tasks_df)
+with tab1:
+    st.title("📊 稼働状況ダッシュボード (🛠️ パッケージ汎用版)")
+    st.caption("Redmineから取得した担当者名の表記揺れを自動補正し、正確なリアルタイム負荷を表示します。")
     
-    overdue_count = 0
-    for _, row in active_tasks_df.iterrows():
-        val = row["期日"]
-        if val and val != "未設定":
-            clean_today = today_prefix
-            if val.replace("/", "-") < datetime.now().strftime("%Y-%m-%d"):
-                overdue_count += 1
-
-    closed_count = total_tickets - remaining_tasks_count
-    completion_rate = round((closed_count / total_tickets) * 100, 1) if total_tickets > 0 else 0.0
-
-    # --- KPI表示エリア ---
-    st.subheader("📈 チーム稼働・プロジェクト進捗指標")
-    b_col1, b_col2, b_col3, b_col4 = st.columns(4)
-    with b_col1:
-        st.metric(label="🌟 本日発生（新規）", value=f"{today_created_count} 件")
-    with b_col2:
-        st.metric(label="🔥 現在の残タスク数", value=f"{remaining_tasks_count} 件")
-    with b_col3:
-        st.metric(label="👨‍💼 全体消化率", value=f"{completion_rate} %")
-    with b_col4:
-        st.metric(label="⚠️ 期限超過（遅延）", value=f"{overdue_count} 件", 
-                  delta="要フォロー！" if overdue_count > 0 else None, delta_color="inverse" if overdue_count > 0 else "normal")
-
-    if ENV_STAGE in ["Dev", "QA"]:
-        st.markdown("---")
-        st.subheader("⚙️ AI自動仕分けデバッグ指標（開発者向け）")
-        unassigned_count = len(df[df["担当者"] == "未割り当て"])
-        assigned_count = total_tickets - unassigned_count
+    if members:
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        active_display_members = [m for m in members if m["join_date"] <= today_str <= m["exit_date"]]
         
-        d_col1, d_col2, d_col3 = st.columns(3)
-        with d_col1:
-            st.metric(label="総チケット数", value=total_tickets)
-        with d_col2:
-            st.metric(label="AI仕分け完了", value=assigned_count)
-        with d_col3:
-            st.metric(label="未割り当て（滞留）", value=unassigned_count,
-                      delta="滞留あり" if unassigned_count > 0 else "クリア！", delta_color="normal" if unassigned_count == 0 else "inverse")
-
+        if active_display_members:
+            cols = st.columns(len(active_display_members))
+            for i, m in enumerate(active_display_members):
+                with cols[i]:
+                    st.metric(label=m["name"], value=m["role"], delta=f"参画期間: {m['join_date']} 〜 {m['exit_date']}")
+    
     st.markdown("---")
+    
+    try:
+        res = requests.get(f"{REDMINE_URL}/issues.json?project_id=ai-test&status_id=*&limit=100", auth=AUTH, timeout=5)
+        if res.status_code == 200:
+            issues = res.json().get("issues", [])
+            
+            if issues:
+                df_issues = pd.DataFrame(issues)
+                
+                total_tickets = len(issues)
+                closed_count = 0
+                open_count = 0
+                unassigned_count = 0
+                overdue_count = 0
+                
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                assignee_list = []
+                status_list = []
+                
+                for idx, row in df_issues.iterrows():
+                    status_obj = row.get("status", {})
+                    status_name = status_obj.get("name", "新規")
+                    
+                    if status_name in ["終了", "クローズ", "Closed", "Resolved"]:
+                        closed_count += 1
+                        status_list.append("終了")
+                    else:
+                        open_count += 1
+                        status_list.append("新規")
+                        
+                        due_date = row.get("due_date")
+                        if isinstance(due_date, str) and due_date < today_str:
+                            overdue_count += 1
+                    
+                    assignee = row.get("assigned_to")
+                    if isinstance(assignee, dict):
+                        raw_name = assignee.get("name")
+                        assignee_list.append(match_member_name(raw_name, members))
+                    else:
+                        unassigned_count += 1
+                        assignee_list.append("未割り当て")
+                
+                completion_rate = round((closed_count / total_tickets) * 100, 1) if total_tickets > 0 else 0.0
+                
+                st.subheader("📈 チーム稼働・プロジェクト進捗指標")
+                m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+                m_col1.metric(label="🌟 総チケット数", value=f"{total_tickets} 件")
+                m_col2.metric(label="🔥 現在の残タスク数", value=f"{open_count} 件")
+                m_col3.metric(label="🧸 進捗率", value=f"{completion_rate} %")
+                m_col4.metric(label="⚠️ 期限超過", value=f"{overdue_count} 件")
+                
+                st.markdown("---")
+                
+                g_col1, g_col2 = st.columns(2)
+                
+                with g_col1:
+                    st.subheader("👥 担当者ごとのタスク負荷 (残タスク数)")
+                    df_open_issues = df_issues[~df_issues['status'].apply(lambda x: x.get('name', '') in ["終了", "クローズ", "Closed", "Resolved"])]
+                    
+                    open_assignees = []
+                    for idx, row in df_open_issues.iterrows():
+                        assignee = row.get("assigned_to")
+                        if isinstance(assignee, dict):
+                            open_assignees.append(match_member_name(assignee.get("name"), members))
+                        else:
+                            open_assignees.append("未割り当て")
+                    
+                    if open_assignees:
+                        df_counts = pd.Series(open_assignees).value_counts().reset_index()
+                        df_counts.columns = ["担当者", "残タスク件数"]
+                        
+                        fig_bar = px.bar(
+                            df_counts,
+                            x="残タスク件数",
+                            y="担当者",
+                            orientation="h",
+                            color="担当者",
+                            color_discrete_sequence=px.colors.qualitative.Pastel
+                        )
+                        fig_bar.update_layout(
+                            showlegend=False,
+                            height=350,
+                            margin=dict(l=20, r=20, t=10, b=10),
+                            yaxis={'categoryorder': 'total ascending'}
+                        )
+                        st.plotly_chart(fig_bar, use_container_width=True)
+                    else:
+                        st.info("現在、残タスクはありません。")
+                
+                with g_col2:
+                    st.subheader("🔔 タスクステータス内訳")
+                    df_status = pd.DataFrame({"ステータス": status_list})
+                    df_status_counts = df_status["ステータス"].value_counts().reset_index()
+                    df_status_counts.columns = ["ステータス", "件数"]
+                    
+                    fig_pie = px.pie(
+                        df_status_counts,
+                        names="ステータス",
+                        values="件数",
+                        color="ステータス",
+                        color_discrete_map={"新規": "#5dade2", "終了": "#e74c3c"}
+                    )
+                    fig_pie.update_layout(height=350, margin=dict(l=20, r=20, t=10, b=10))
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                
+                df_all_counts = pd.Series(assignee_list).value_counts().reset_index()
+                df_all_counts.columns = ["担当者", "総チケット件数"]
+                st.table(df_all_counts)
+                
+            else:
+                st.info("現在、プロジェクト内にチケットはありません。")
+    except Exception as e:
+        st.error(f"Redmineデータの集計中にエラーが発生しました: {e}")
 
-    # --- グラフエリア ---
-    graph_col1, graph_col2 = st.columns(2)
-    with graph_col1:
-        st.subheader("👥 担当者ごとのタスク負荷（残タスク件数）")
-        if remaining_tasks_count > 0:
-            df_count = active_tasks_df["担当者"].value_counts().reset_index()
-            df_count.columns = ["担当者", "残件数"]
-            fig = px.bar(df_count, x="残件数", y="担当者", orientation='h', 
-                         color="担当者", text="残件数",
-                         color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig.update_layout(showlegend=False, height=320, margin=dict(l=0, r=0, t=20, b=0))
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.success("🎉 現在、対応が必要な残タスクはありません！")
+with tab2:
+    st.header("👥 プロジェクト要員管理 ＆ 休暇計画")
+    
+    with st.expander("➕ 新規メンバーの追加 / 既存情報・休暇の修正"):
+        member_names = [m["name"] for m in members]
+        target_name = st.selectbox("編集するメンバーを選択", ["(新規追加)"] + member_names)
+        target_data = next((m for m in members if m["name"] == target_name), None)
+        
+        with st.form("member_form"):
+            name = st.text_input("氏名", value=target_data["name"] if target_data else "")
+            login = st.text_input("ログインID", value=target_data["login"] if target_data else "")
+            role = st.text_input("担当領域 / 役割", value=target_data["role"] if target_data else "")
+            skills = st.text_area("保有スキル (カンマ区切り)", value=target_data.get("skills", "") if target_data else "")
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                join_date = st.date_input("参画日", value=datetime.strptime(target_data["join_date"], "%Y-%m-%d") if target_data else datetime.now())
+            with col_b:
+                exit_date = st.date_input("離脱予定日", value=datetime.strptime(target_data["exit_date"], "%Y-%m-%d") if target_data else datetime.now())
+            
+            st.markdown("**📅 休暇スケジュール設定**")
+            # 曜日選択
+            current_fixed = target_data.get("fixed_holidays", []) if target_data else []
+            fixed_labels = [WEEKDAYS[d] for d in current_fixed if d < 7]
+            selected_fixed_labels = st.multiselect("定例曜日休暇 (毎週休む曜日)", WEEKDAYS, default=fixed_labels)
+            fixed_indices = [WEEKDAYS.index(lbl) for lbl in selected_fixed_labels]
+            
+            # 特定日入力
+            current_specific = ", ".join(target_data.get("specific_holidays", [])) if target_data else ""
+            specific_input = st.text_input("特定日休暇 (カンマ区切り、例: 2026-07-03, 2026-07-15)", value=current_specific)
+            specific_list = [d.strip() for d in specific_input.split(",") if re.match(r'^\d{4}-\d{2}-\d{2}$', d.strip())]
+            
+            submit = st.form_submit_button("保存する")
+            if submit:
+                new_member = {
+                    "id": target_data["id"] if target_data else 99,
+                    "login": login, "name": name, "role": role, "skills": skills,
+                    "join_date": join_date.strftime("%Y-%m-%d"), "exit_date": exit_date.strftime("%Y-%m-%d"),
+                    "fixed_holidays": fixed_indices,
+                    "specific_holidays": specific_list
+                }
+                if target_data:
+                    members = [new_member if m["name"] == target_name else m for m in members]
+                else:
+                    members.append(new_member)
+                save_members(members)
+                st.success(f"{name} さんの情報を更新しました！")
+                st.rerun()
 
-    with graph_col2:
-        st.subheader("🔔 タスクステータス内訳")
-        df_status = df["ステータス"].value_counts().reset_index()
-        df_status.columns = ["ステータス", "件数"]
-        fig_pie = px.pie(df_status, values="件数", names="ステータス", 
-                         color_discrete_sequence=px.colors.qualitative.Safe)
-        fig_pie.update_layout(height=320, margin=dict(l=0, r=0, t=20, b=0))
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-    st.markdown("---")
-    st.subheader("📋 リアルタイムチケット一覧")
-    st.dataframe(df, use_container_width=True)
+    st.subheader("📋 現在のプロジェクトメンバー一覧 (休暇計画含む)")
+    if members:
+        display_rows = []
+        for m in members:
+            # 曜日インデックスを日本語表記に変換
+            fixed_str = ", ".join([WEEKDAYS[idx] for idx in m.get("fixed_holidays", [])]) if m.get("fixed_holidays") else "なし"
+            specific_str = ", ".join(m.get("specific_holidays", [])) if m.get("specific_holidays") else "なし"
+            
+            display_rows.append({
+                "氏名": m["name"],
+                "役割": m["role"],
+                "参画日": m["join_date"],
+                "離脱予定日": m["exit_date"],
+                "定例曜日休暇": fixed_str,
+                "特定日休暇": specific_str,
+                "保有スキル": m["skills"]
+            })
+        st.table(pd.DataFrame(display_rows))
