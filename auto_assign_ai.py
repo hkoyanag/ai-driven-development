@@ -4,163 +4,170 @@ import json
 import time
 import re
 from datetime import datetime
-import google.generativeai as genai
 from dotenv import load_dotenv
+# パッケージ化されたAI工場モジュールをインポート
+from ai_modules import ai_factory
 
 load_dotenv()
 
-# Redmine・Gemini基本設定
+# Redmine基本設定
 REDMINE_URL = os.getenv("REDMINE_URL", "http://localhost:3000")
 REDMINE_USER = os.getenv("REDMINE_ADMIN_USER", "admin")
 REDMINE_PASSWORD = os.getenv("REDMINE_ADMIN_PASSWORD", "password")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ENV_STAGE = os.getenv("ENV_STAGE", "Dev")
 
-# 🌟 .env から運行モード、インターバル、モデル、ウェイト、プロジェクトIDを動的に取得
+# .env から運行モード、巡回インターバル、API負荷回避用ウェイト、プロジェクトIDを動的にロード
 AI_EXEC_MODE = os.getenv("AI_EXEC_MODE", "Manual")
 AI_CHECK_INTERVAL = int(os.getenv("AI_CHECK_INTERVAL", "5"))
 AI_RATE_LIMIT_SLEEP = int(os.getenv("AI_RATE_LIMIT_SLEEP", "12"))
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 REDMINE_PROJECT_ID = os.getenv("REDMINE_PROJECT_ID", "ai-test")
 
 AUTH = (REDMINE_USER, REDMINE_PASSWORD)
-genai.configure(api_key=GEMINI_API_KEY)
 
 def load_current_members():
+    """要員スケジュールマスタ (members.json) をロードする"""
     if os.path.exists("members.json"):
         with open("members.json", "r", encoding="utf-8") as f:
             return json.load(f)
     return []
 
 def normalize_name(name_str):
+    """名前から全角・半角スペースや改行などの空白文字を完全に排除して正規化する"""
     if not name_str:
         return ""
-    return re.sub(r'\s+', '', str(name_str))
+    return re.sub(r'[\s\u3000]+', '', str(name_str))
 
 def is_member_active_on_date(member, check_date_str):
+    """
+    対象日にメンバーが稼働可能か（参画期間内かつ各種休暇日でないか）を厳格に判定する
+    """
     try:
         check_date = datetime.strptime(check_date_str, "%Y-%m-%d")
+        
+        # 1. 契約参画・離脱期間のチェック
         join_date = datetime.strptime(member["join_date"], "%Y-%m-%d")
         exit_date = datetime.strptime(member["exit_date"], "%Y-%m-%d")
-        return join_date <= check_date <= exit_date
+        if not (join_date <= check_date <= exit_date):
+            return False
+            
+        # 2. 定例固定曜日休みのチェック (0=月曜日, 6=日曜日)
+        weekday = check_date.weekday()
+        fixed_holidays = member.get("fixed_holidays", [])
+        if weekday in fixed_holidays:
+            return False
+            
+        # 3. 突発・特定日休みのチェック ("YYYY-MM-DD"形式の配列)
+        specific_holidays = member.get("specific_holidays", [])
+        if check_date_str in specific_holidays:
+            return False
+            
+        return True
     except Exception:
         return False
 
-def find_best_member_with_ai(subject, description, due_date_str, members):
-    # チケット期日時点でアクティブなメンバーのみを抽出
-    active_members = [m for m in members if is_member_active_on_date(m, due_date_str)]
-    
-    pm_member = next((m for m in members if "PM" in m.get("role", "").upper() or "管理" in m.get("role", "")), None)
-    pm_name = pm_member["name"] if pm_member else (members[0]["name"] if members else "管理者")
-    
-    if not active_members:
-        print(f"  ⚠️ 警告: 対象期日 {due_date_str} にアクティブなメンバーがいません。PM【{pm_name}】へ迂回します。")
-        return pm_name
-
-    # 🌟 本日の日付を取得
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    current_weekday = datetime.now().weekday() # 0=月, 6=日
-
-    # 🌟 メンバーの期間と休暇情報をAIに渡すテキストへ含めるように強化！
-    members_profile_text = ""
-    for m in active_members:
-        # 定例休暇の曜日変換
-        weekdays_list = ["月", "火", "水", "木", "金", "土", "日"]
-        fixed_holidays_js = ", ".join([weekdays_list[idx] for idx in m.get("fixed_holidays", [])])
-        specific_holidays_js = ", ".join(m.get("specific_holidays", []))
-
-        members_profile_text += (
-            f"- 氏名: {m['name']}\n"
-            f"  役割: {m['role']}\n"
-            f"  スキル: {m.get('skills', '未設定')}\n"
-            f"  参画期間: {m['join_date']} 〜 {m['exit_date']}\n"
-            f"  毎週の定例休み: {fixed_holidays_js if fixed_holidays_js else 'なし'}\n"
-            f"  突発・特定日休み: {specific_holidays_js if specific_holidays_js else 'なし'}\n\n"
-        )
-
-    text_to_analyze = f"【件名】: {subject}\n【本文】: {description}\n【チケット期日】: {due_date_str}"
-    
-    prompt = f"""
-    あなたはIT開発プロジェクトの高度なリソースマネージャーです。
-    タスク情報（件名・本文・期日）を分析し、現在プロジェクトに参画している以下の「メンバー候補」の中から、スキルと役割が最も適合する1名を厳密に選定してアサインしてください。
-    
-    【本日の日付】
-    {today_str} (曜日のインデックス: {current_weekday})
-    
-    【参画中のメンバー候補】
-    {members_profile_text}
-    
-    【アサインの厳格ルール】
-    1. 【最重要・最優先】本日（{today_str}）が、各メンバーの「参画期間」の範囲外である場合、そのメンバーは絶対にアサインしないでください（過去に離脱した人、未来に参加する人は除外）。
-    2. 【最重要】本日（{today_str}）が、メンバーの「突発・特定日休み」の日付と完全に一致している場合、そのメンバーは本日稼働できないため、絶対にアサインしないでください。
-    3. 技術スタック（ネットワーク、DB、画面、フロント、API、バックエンド等）と、稼働可能なメンバーの「役割」「スキル」の一致度を見て選定してください。
-    4. ルール1, 2により適任者が不在、または本日稼働できるメンバーが誰もいない場合は、責任持ってタスクを引き受けるプロジェクトマネージャー（PM）の【{pm_name}】をアサインしてください。
-    
-    【対象チケット】
-    {text_to_analyze}
-    
-    【出力フォーマット】
-    必ず以下のJSON形式のみで回答してください。余計な解説文は一切含めないでください。
-    {{"assigned_name": "選定したメンバーの氏名"}}
+def find_best_member_with_ai(subject, description, due_date_str, current_members) -> str:
     """
+    指定されたAIプロバイダを使用してチケットの最適なアサイン先を判定する。
+    キー未設定時、またはAPIエラー時は、即座に内製キーワードマッチングへ安全にフォールバックする。
+    """
+    main_provider_name = os.getenv("ACTIVE_AI_PROVIDER", "Groq").strip()
     
-    try:
-        # 🌟 使用するモデルを設定ファイルから動的にバインド
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"}
-        )
-        result_json = json.loads(response.text.strip())
-        assigned_name = result_json.get("assigned_name", "").strip()
-        
-        norm_assigned = normalize_name(assigned_name)
-        if norm_assigned == normalize_name(pm_name):
-            return pm_name
-            
-        for m in active_members:
-            if norm_assigned == normalize_name(m["name"]):
+    # 基準日（チケットの締切日等）においてアクティブ（休暇外・期間内）なメンバーを抽出
+    active_candidates = [m for m in current_members if is_member_active_on_date(m, due_date_str)]
+    
+    # セーフティガード：アクティブな候補者が1人もいない場合、無駄なAPI通信をせずにPMへ自動エスカレーション
+    if not active_candidates:
+        print("⚠️ 該当期間にアクティブな要員がマスタに存在しません。自動的にPMへ割り当てます。")
+        for m in current_members:
+            if "pm" in m.get("role", "").lower() or "マネージャー" in m.get("role", ""):
                 return m["name"]
-    except Exception as e:
-        print(f"  ⚠️ Gemini解析フォールバック（APIエラー等による救済措置）を実行します: {e}")
-        
-    combined_text = (subject + " " + description).lower()
-    best_member = None
-    max_score = 0
+        return current_members[0]["name"] if current_members else "小栁 明"
+
+    print(f"[{main_provider_name}] によるAIアサイン判定を実行中...")
     
-    for m in active_members:
-        score = 0
-        keywords = [k.strip().lower() for k in (m.get("skills", "") + "," + m.get("role", "")).split(",") if k.strip()]
-        for kw in keywords:
-            if kw in combined_text:
-                score += 1
-        if score > max_score:
-            max_score = score
-            best_member = m
-            
-    if best_member and max_score > 0:
-        return best_member["name"]
+    # APIキーの存在有無を静的にチェック
+    main_key_env_var = f"{main_provider_name.upper()}_API_KEY"
+    main_api_key = os.getenv(main_key_env_var, "")
+    
+    # キーが未設定、またはダミー値の場合は通信をスキップして即フォールバックへ
+    if not main_api_key or "dummy" in main_api_key.lower() or "your_" in main_api_key.lower():
+        print(f"⚠️ {main_provider_name} の有効なAPIキーが設定されていないため、AI通信をスキップします。")
+        raise ValueError(f"Valid API key for {main_provider_name} is missing.")
         
-    return pm_name
+    # Groq等のJSON modeの制約を完全に突破する、システム指示を内包した厳密なプロンプトの組み立て
+    prompt = f"""
+    You are an expert software project manager. Analyze the following Redmine ticket and select the best candidate from the active candidates list based on their role and skills.
+    
+    [Ticket Information]
+    - Subject: {subject}
+    - Description: {description}
+    - Assignment Date: {due_date_str}
+
+    [Active Candidates List]
+    {json.dumps(active_candidates, ensure_ascii=False, indent=2)}
+
+    [Output Constraint]
+    You must output a single, valid JSON object containing exactly one key 'assigned_name' like below. Do not output any conversational prose, commentary, or markdown code block.
+    {{"assigned_name": "Exact Name of the Selected Member"}}
+    """
+
+    try:
+        # 工場クラスから動的にAIプロバイダをインスタンス化
+        ai_engine = ai_factory.AIFactory.get_provider()
+        response_json_str = ai_engine.ask_assignment(prompt)
+        
+        # 💡 マークダウンパーサーとの干渉を防ぐため、バッククォート文字列を動的に生成して除去
+        backticks = "`" * 3
+        if backticks in response_json_str:
+            response_json_str = response_json_str.replace(f"{backticks}json", "").replace(backticks, "").strip()
+            
+        result = json.loads(response_json_str)
+        if "assigned_name" in result and result["assigned_name"]:
+            return result["assigned_name"]
+        raise ValueError("AIからのレスポンスに 'assigned_name' が含まれていません。")
+        
+    except Exception as e:
+        print(f"❌ メインAI ({main_provider_name}) でのエラーまたは制限到達を検知: {e}")
+        print("🔒 安全のため、プログラム内製の『静的キーワード判定ロジック』を実行します...")
+        
+        # 内製フォールバック：件名と本文から技術キーワードを抽出し、メンバーのスキルと部分一致比較
+        norm_desc = (subject + description).lower()
+        for m in active_candidates:
+            skills = m.get("skills", "").lower()
+            for skill_word in [s.strip() for s in skills.split(",") if s.strip()]:
+                if skill_word in norm_desc:
+                    return m["name"]
+                    
+        # 適任者がいなければ、アクティブなPMへ自動迂回
+        for m in active_candidates:
+            if "pm" in m.get("role", "").lower() or "マネージャー" in m.get("role", ""):
+                return m["name"]
+                
+        # 最終手段としてアクティブメンバーの先頭名
+        return active_candidates[0]["name"]
 
 def get_user_id_by_name(name, redmine_users):
+    """メンバー氏名からRedmine上のユーザーIDを完全一致で特定する（スペースの有無を無効化）"""
     norm_target = normalize_name(name)
     for user in redmine_users:
         last = user.get('lastname', '')
         first = user.get('firstname', '')
+        # 「姓＋名」および「名＋姓」の空白を除去して完全一致判定
         if normalize_name(f"{last}{first}") == norm_target or normalize_name(f"{first}{last}") == norm_target:
             return user["id"]
     return None
 
 def process_all_issues():
-    """未割り当てチケットをスキャンして仕分ける主処理"""
+    """未割り当てチケットを検出し、最適なアサイン先へ仕分けを行うメイン処理"""
     try:
+        # Redmineからユーザー一覧を一括取得
         user_res = requests.get(f"{REDMINE_URL}/users.json?limit=100", auth=AUTH, timeout=15)
         redmine_users = user_res.json().get("users", []) if user_res.status_code == 200 else []
     except Exception as e:
         print(f"⚠️ ユーザーマスタの取得に失敗しました: {e}")
         return
 
+    # 未割り当てのオープンチケットの一覧を取得
     url = f"{REDMINE_URL}/issues.json?project_id={REDMINE_PROJECT_ID}&status_id=open&limit=100"
     try:
         res = requests.get(url, auth=AUTH, timeout=5)
@@ -168,6 +175,7 @@ def process_all_issues():
             return
             
         all_issues = res.json().get("issues", [])
+        # 担当者が None (未割り当て) のものだけを抽出
         issues = [i for i in all_issues if i.get("assigned_to") is None]
         
         if not issues:
@@ -180,28 +188,31 @@ def process_all_issues():
             issue_id = issue["id"]
             subject = issue["subject"]
             description = issue.get("description", "")
+            # チケットに期限がなければ今日の日付を基準日とする
             due_date_str = issue.get("due_date") or datetime.now().strftime("%Y-%m-%d")
             
             print(f"\n--- 📦 チケット #{issue_id} の仕分け開始 ---")
             final_assignee_name = find_best_member_with_ai(subject, description, due_date_str, current_members)
-            print(f"  🎯 AI判定結果: 【{final_assignee_name}】 さんに決定")
+            print(f"  🎯 判定結果: 【{final_assignee_name}】 に決定")
             
+            # 決定した人名からRedmine上の数値IDを特定
             user_id = get_user_id_by_name(final_assignee_name, redmine_users)
             if not user_id:
-                print(f"  ❌ エラー: Redmine上にユーザー 【{final_assignee_name}】 が見つかりません。")
+                print(f"  ❌ エラー: Redmine上にユーザー 【{final_assignee_name}】 が見つかりません。フォールバック処理を続行。")
                 continue
                 
+            # チケットの担当者フィールドを自動更新
             update_url = f"{REDMINE_URL}/issues/{issue_id}.json"
             payload = {"issue": {"assigned_to_id": user_id}}
             requests.put(update_url, auth=AUTH, json=payload, timeout=5)
             
-            # 🌟 チケットを1件処理するごとに、指定された安全マージン（12秒）を「必ず」挟む
+            # 大量リクエスト時のAPIレートリミット(429)を回避するための自動スリープ
             if ENV_STAGE in ["Dev", "QA"]:
                 time.sleep(AI_RATE_LIMIT_SLEEP)
                 
-        # 🌟 1周の仕分け（塊）がすべて終わった後も、APIの負荷を逃がすために追加で12秒完全に休ませる
+        # 1周のスキャンが終わるごとに追加のクールダウンを挿入
         if ENV_STAGE in ["Dev", "QA"]:
-            print(f"  ☕ APIの連続制限を回避するため、{AI_RATE_LIMIT_SLEEP}秒間のクールダウンに入ります...")
+            print(f"\n☕ APIの連続制限を回避するため、{AI_RATE_LIMIT_SLEEP}秒間のクールダウンに入ります...")
             time.sleep(AI_RATE_LIMIT_SLEEP)
 
     except Exception as e:
@@ -211,7 +222,7 @@ if __name__ == "__main__":
     print(f"🤖 [共通パッケージ仕様] 完全汎用型AI自動仕分けエンジン 起動")
     print(f"  🔧 運行モード: {AI_EXEC_MODE} (インターバル: {AI_CHECK_INTERVAL}秒)")
     
-    # 🌟 .env の AI_EXEC_MODE に基づいて自律監視モードを完全稼働
+    # 運行モードに応じた監視ループの実行
     if AI_EXEC_MODE == "Auto":
         print("🔄 自律巡回監視ループを開始します。停止するには Ctrl+C を押してください。")
         while True:
