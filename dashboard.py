@@ -230,17 +230,22 @@ with tab2:
     if members:
         display_rows = []
         for m in members:
-            fixed_str = ", ".join([WEEKDAYS[idx] for idx in m.get("fixed_holidays", [])]) if m.get("fixed_holidays") else "なし"
-            specific_str = ", ".join(m.get("specific_holidays", [])) if m.get("specific_holidays") else "なし"
+            # 💡 もし万が一 fixed_holidays が数値単体や null だった場合も想定して、リスト内包表記を安全に
+            fh_list = m.get("fixed_holidays", [])
+            if not isinstance(fh_list, list):
+                fh_list = []
+            fixed_str = ", ".join([WEEKDAYS[idx] for idx in fh_list if isinstance(idx, int) and idx < 7]) if fh_list else "なし"
             
-            # 💡 m["skills"] ではなく m.get("skills", "未登録") にして KeyError を完全に防御
+            sh_list = m.get("specific_holidays", [])
+            specific_str = ", ".join(sh_list) if isinstance(sh_list, list) and sh_list else "なし"
+            
             display_rows.append({
-                "氏名": m["name"],
-                "役割": m["role"],
-                "参画日": m["join_date"],
-                "離脱予定日": m["exit_date"],
-                "定例曜日休暇": fixed_str,
-                "特定日休暇": specific_str,
-                "保有スキル": m.get("skills", "未登録")
+                "氏名": str(m.get("name", "未登録")),
+                "役割": str(m.get("role", "未登録")),
+                "参画日": str(m.get("join_date", "未登録")),
+                "離脱予定日": str(m.get("exit_date", "未登録")),
+                "定例曜日休暇": str(fixed_str),
+                "特定日休暇": str(specific_str),
+                "保有スキル": str(m.get("skills", "未登録")) # 💡str() で囲んで完全な文字列へ固定
             })
         st.table(pd.DataFrame(display_rows))
