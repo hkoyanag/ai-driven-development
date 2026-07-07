@@ -7,9 +7,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 REDMINE_URL = os.getenv("REDMINE_URL", "http://localhost:3000")
-REDMINE_USER = os.getenv("REDMINE_ADMIN_USER", "admin")
-REDMINE_PASSWORD = os.getenv("REDMINE_ADMIN_PASSWORD", "password")
-AUTH = (REDMINE_USER, REDMINE_PASSWORD)
+REDMINE_API_KEY = os.getenv("REDMINE_API_KEY", "")
+
+# 🔑 APIキー認証ヘッダーを定義
+HEADERS = {
+    "X-Redmine-API-Key": REDMINE_API_KEY,
+    "Content-Type": "application/json"
+}
 
 # .env からプロジェクトID、各種デフォルトIDを動的ロード
 REDMINE_PROJECT_ID = os.getenv("REDMINE_PROJECT_ID", "ai-test")

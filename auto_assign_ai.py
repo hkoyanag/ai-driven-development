@@ -12,17 +12,21 @@ load_dotenv()
 
 # Redmine基本設定
 REDMINE_URL = os.getenv("REDMINE_URL", "http://localhost:3000")
-REDMINE_USER = os.getenv("REDMINE_ADMIN_USER", "admin")
-REDMINE_PASSWORD = os.getenv("REDMINE_ADMIN_PASSWORD", "password")
+# 🔑 ID/PWを廃止し、ダッシュボードと共通のAPIキー認証へ統一
+REDMINE_API_KEY = os.getenv("REDMINE_API_KEY", "")
 ENV_STAGE = os.getenv("ENV_STAGE", "Dev")
+
+# APIキー認証用の共通ヘッダーを定義
+HEADERS = {
+    "X-Redmine-API-Key": REDMINE_API_KEY,
+    "Content-Type": "application/json"
+}
 
 # .env から運行モード、巡回インターバル、API負荷回避用ウェイト、プロジェクトIDを動的にロード
 AI_EXEC_MODE = os.getenv("AI_EXEC_MODE", "Manual")
 AI_CHECK_INTERVAL = int(os.getenv("AI_CHECK_INTERVAL", "5"))
 AI_RATE_LIMIT_SLEEP = int(os.getenv("AI_RATE_LIMIT_SLEEP", "12"))
 REDMINE_PROJECT_ID = os.getenv("REDMINE_PROJECT_ID", "ai-test")
-
-AUTH = (REDMINE_USER, REDMINE_PASSWORD)
 
 def load_current_members():
     """要員スケジュールマスタ (members.json) をロードする"""
@@ -161,7 +165,7 @@ def process_all_issues():
     """未割り当てチケットを検出し、最適なアサイン先へ仕分けを行うメイン処理"""
     try:
         # Redmineからユーザー一覧を一括取得
-        user_res = requests.get(f"{REDMINE_URL}/users.json?limit=100", auth=AUTH, timeout=15)
+        user_res = requests.get(f"{REDMINE_URL}/users.json?limit=100", headers=HEADERS, timeout=15)
         redmine_users = user_res.json().get("users", []) if user_res.status_code == 200 else []
     except Exception as e:
         print(f"⚠️ ユーザーマスタの取得に失敗しました: {e}")
@@ -170,7 +174,7 @@ def process_all_issues():
     # 未割り当てのオープンチケットの一覧を取得
     url = f"{REDMINE_URL}/issues.json?project_id={REDMINE_PROJECT_ID}&status_id=open&limit=100"
     try:
-        res = requests.get(url, auth=AUTH, timeout=5)
+        res = requests.get(url, headers=HEADERS, timeout=5)    
         if res.status_code != 200:
             return
             
@@ -204,7 +208,7 @@ def process_all_issues():
             # チケットの担当者フィールドを自動更新
             update_url = f"{REDMINE_URL}/issues/{issue_id}.json"
             payload = {"issue": {"assigned_to_id": user_id}}
-            requests.put(update_url, auth=AUTH, json=payload, timeout=5)
+            requests.put(update_url, headers=HEADERS, json=payload, timeout=5)
             
             # 大量リクエスト時のAPIレートリミット(429)を回避するための自動スリープ
             if ENV_STAGE in ["Dev", "QA"]:

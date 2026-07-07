@@ -13,9 +13,12 @@ load_dotenv()
 st.set_page_config(page_title="AI-Driven Development Dashboard", layout="wide")
 
 REDMINE_URL = os.getenv("REDMINE_URL", "http://localhost:3000")
-REDMINE_USER = os.getenv("REDMINE_ADMIN_USER", "admin")
-REDMINE_PASSWORD = os.getenv("REDMINE_ADMIN_PASSWORD", "password")
-AUTH = (REDMINE_USER, REDMINE_PASSWORD)
+# 🔑 パスワード認証からAPIキー認証へ変更
+REDMINE_API_KEY = os.getenv("REDMINE_API_KEY", "")
+HEADERS = {
+    "X-Redmine-API-Key": REDMINE_API_KEY,
+    "Content-Type": "application/json"
+}
 
 WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
 
@@ -59,7 +62,8 @@ with tab1:
     st.markdown("---")
     
     try:
-        res = requests.get(f"{REDMINE_URL}/issues.json?project_id=ai-test&status_id=*&limit=100", auth=AUTH, timeout=5)
+        # 🛠️ auth=AUTH から headers=HEADERS に変更
+        res = requests.get(f"{REDMINE_URL}/issues.json?project_id=ai-test&status_id=*&limit=100", headers=HEADERS, timeout=5)
         if res.status_code == 200:
             issues = res.json().get("issues", [])
             
@@ -168,9 +172,13 @@ with tab1:
                 
             else:
                 st.info("現在、プロジェクト内にチケットはありません。")
+        else:
+            # 🛠️ 認証失敗などのエラーを画面に通知する親切設計を追加
+            st.error(f"Redmineからのデータ取得に失敗しました。Status Code: {res.status_code}")
     except Exception as e:
         st.error(f"Redmineデータの集計中にエラーが発生しました: {e}")
 
+# --- dashboard.py の最下部付近を以下に差し替え ---
 with tab2:
     st.header("👥 プロジェクト要員管理 ＆ 休暇計画")
     
@@ -192,13 +200,11 @@ with tab2:
                 exit_date = st.date_input("離脱予定日", value=datetime.strptime(target_data["exit_date"], "%Y-%m-%d") if target_data else datetime.now())
             
             st.markdown("**📅 休暇スケジュール設定**")
-            # 曜日選択
             current_fixed = target_data.get("fixed_holidays", []) if target_data else []
             fixed_labels = [WEEKDAYS[d] for d in current_fixed if d < 7]
             selected_fixed_labels = st.multiselect("定例曜日休暇 (毎週休む曜日)", WEEKDAYS, default=fixed_labels)
             fixed_indices = [WEEKDAYS.index(lbl) for lbl in selected_fixed_labels]
             
-            # 特定日入力
             current_specific = ", ".join(target_data.get("specific_holidays", [])) if target_data else ""
             specific_input = st.text_input("特定日休暇 (カンマ区切り、例: 2026-07-03, 2026-07-15)", value=current_specific)
             specific_list = [d.strip() for d in specific_input.split(",") if re.match(r'^\d{4}-\d{2}-\d{2}$', d.strip())]
@@ -224,10 +230,10 @@ with tab2:
     if members:
         display_rows = []
         for m in members:
-            # 曜日インデックスを日本語表記に変換
             fixed_str = ", ".join([WEEKDAYS[idx] for idx in m.get("fixed_holidays", [])]) if m.get("fixed_holidays") else "なし"
             specific_str = ", ".join(m.get("specific_holidays", [])) if m.get("specific_holidays") else "なし"
             
+            # 💡 m["skills"] ではなく m.get("skills", "未登録") にして KeyError を完全に防御
             display_rows.append({
                 "氏名": m["name"],
                 "役割": m["role"],
@@ -235,6 +241,6 @@ with tab2:
                 "離脱予定日": m["exit_date"],
                 "定例曜日休暇": fixed_str,
                 "特定日休暇": specific_str,
-                "保有スキル": m["skills"]
+                "保有スキル": m.get("skills", "未登録")
             })
         st.table(pd.DataFrame(display_rows))
